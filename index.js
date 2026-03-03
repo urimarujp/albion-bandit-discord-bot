@@ -7,27 +7,33 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 
-// 任意：ロールメンションしたいときだけ設定（空ならメンション無し）
+// 任意：ロールメンション（入れないなら空でOK）
 const ROLE_ID = process.env.ROLE_ID || "";
+
+// 任意：テスト用（trueなら常に送信）
+const FORCE_NOTIFY = (process.env.FORCE_NOTIFY || "").toLowerCase() === "true";
 
 // 山賊開始時刻（UTC固定）
 const BANDIT_START_UTC_HOURS = [2, 5, 7, 9, 13, 15, 17, 19];
-const NOTICE_MINUTES = 15;
 
-// 二重投稿防止（GitHub Actionsだと毎回クリーンなので、簡易的に「近い時間なら送らない」方式）
+// 通知設定
+const NOTICE_MINUTES = 15;
+const LATE_TOLERANCE_MINUTES = 5; // GitHub Actionsの遅延対策（開始後5分まで許容）
+
+// 簡易ロック（ローカル/手動連打対策。Actionsでは永続化されないので完全二重防止にはならない）
 const LOCK_FILE = "./last_notice.json";
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
 
 function toJstString(dateUtc) {
   const jst = new Date(dateUtc.getTime() + 9 * 60 * 60 * 1000);
-  const hh = String(jst.getUTCHours()).padStart(2, "0");
-  const mm = String(jst.getUTCMinutes()).padStart(2, "0");
-  return `${hh}:${mm} JST`;
+  return `${pad2(jst.getUTCHours())}:${pad2(jst.getUTCMinutes())} JST`;
 }
 
 function toUtcString(dateUtc) {
-  const hh = String(dateUtc.getUTCHours()).padStart(2, "0");
-  const mm = String(dateUtc.getUTCMinutes()).padStart(2, "0");
-  return `${hh}:${mm} UTC`;
+  return `${pad2(dateUtc.getUTCHours())}:${pad2(dateUtc.getUTCMinutes())} UTC`;
 }
 
 function nextBanditStartUtc(nowUtc) {
@@ -35,7 +41,7 @@ function nextBanditStartUtc(nowUtc) {
   const m = nowUtc.getUTCMonth();
   const d = nowUtc.getUTCDate();
 
-  // 今日の候補
+  // 今日の候補から「次」を探す
   for (const h of BANDIT_START_UTC_HOURS) {
     const candidate = new Date(Date.UTC(y, m, d, h, 0, 0));
     if (candidate > nowUtc) return candidate;
@@ -44,11 +50,14 @@ function nextBanditStartUtc(nowUtc) {
   return new Date(Date.UTC(y, m, d + 1, BANDIT_START_UTC_HOURS[0], 0, 0));
 }
 
+function minutesUntil(startUtc, nowUtc) {
+  return (startUtc.getTime() - nowUtc.getTime()) / 60000;
+}
+
 function shouldNotify(nowUtc, startUtc) {
-  const diffMs = startUtc.getTime() - nowUtc.getTime();
-  const diffMin = diffMs / 60000;
-  // 15分前〜直前の間に実行されたら通知
-  return diffMin <= NOTICE_MINUTES && diffMin > 0;
+  const diffMin = minutesUntil(startUtc, nowUtc);
+  // 15分前〜開始後5分まで許容（schedule遅延対策）
+  return diffMin <= NOTICE_MINUTES && diffMin >= -LATE_TOLERANCE_MINUTES;
 }
 
 function readLock() {
@@ -66,51 +75,73 @@ function writeLock(startIso) {
   );
 }
 
+function buildEmbed(startUtc, nowUtc) {
+  const diffMin = minutesUntil(startUtc, nowUtc);
+  const remainText =
+    diffMin >= 0
+      ? `開始まで約 ${Math.ceil(diffMin)} 分`
+      : `開始から約 ${Math.abs(Math.floor(diffMin))} 分経過`;
+
+  return new EmbedBuilder()
+    .setTitle("🔥 山賊 15分前通知")
+    .setDescription("準備して集合！")
+    .addFields(
+      {
+        name: "開始時刻",
+        value: `${toUtcString(startUtc)} / ${toJstString(startUtc)}`,
+        inline: true,
+      },
+      { name: "状況", value: remainText, inline: true }
+    )
+    .setTimestamp(new Date());
+}
+
 client.once("ready", async () => {
   try {
-    if (!TOKEN || !CHANNEL_ID)
+    if (!TOKEN || !CHANNEL_ID) {
       throw new Error("Missing DISCORD_TOKEN or CHANNEL_ID");
+    }
 
     const nowUtc = new Date();
     const startUtc = nextBanditStartUtc(nowUtc);
+    const diffMin = minutesUntil(startUtc, nowUtc);
 
-    if (!shouldNotify(nowUtc, startUtc)) {
-      console.log("Not in notify window.");
+    console.log("[BanditBot] FORCE_NOTIFY =", FORCE_NOTIFY);
+    console.log("[BanditBot] nowUtc   =", toUtcString(nowUtc));
+    console.log(
+      "[BanditBot] nextStart=",
+      toUtcString(startUtc),
+      "/",
+      toJstString(startUtc)
+    );
+    console.log("[BanditBot] diffMin  =", diffMin);
+
+    if (!FORCE_NOTIFY && !shouldNotify(nowUtc, startUtc)) {
+      console.log("[BanditBot] Not in notify window. Exit.");
       process.exit(0);
     }
 
-    // 二重投稿ガード（同じ開始回は1回だけ）
+    // ロック（同じ開始時刻での連投を抑止）
     const lock = readLock();
-    if (lock.lastStartIso === startUtc.toISOString()) {
-      console.log("Already notified for this start time.");
+    if (!FORCE_NOTIFY && lock.lastStartIso === startUtc.toISOString()) {
+      console.log("[BanditBot] Already notified for this start time. Exit.");
       process.exit(0);
     }
 
     const channel = await client.channels.fetch(CHANNEL_ID);
-
-    const embed = new EmbedBuilder()
-      .setTitle("🔥 山賊 15分前通知")
-      .setDescription("準備して集合！")
-      .addFields(
-        {
-          name: "開始時刻",
-          value: `${toUtcString(startUtc)} / ${toJstString(startUtc)}`,
-          inline: true,
-        },
-        { name: "通知", value: `${NOTICE_MINUTES}分前`, inline: true }
-      )
-      .setTimestamp(new Date());
-
+    const embed = buildEmbed(startUtc, nowUtc);
     const mention = ROLE_ID ? `<@&${ROLE_ID}> ` : "";
+
     await channel.send({
       content: `${mention}山賊まであと${NOTICE_MINUTES}分！`,
       embeds: [embed],
     });
 
     writeLock(startUtc.toISOString());
+    console.log("[BanditBot] Sent successfully.");
     process.exit(0);
   } catch (err) {
-    console.error("Send failed:", err);
+    console.error("[BanditBot] Send failed:", err);
     process.exit(1);
   }
 });
