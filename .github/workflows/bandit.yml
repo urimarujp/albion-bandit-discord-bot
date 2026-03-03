@@ -4,30 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
-    # 本番に戻すとき（UTC）
-    # - cron: "45 1,4,6,8,12,14,16,18 * * *"
 
 jobs:
-  run:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 20
-
-      - name: Show trigger
-        run: |
+      - run: |
           echo "event=${{ github.event_name }}"
           echo "ref=${{ github.ref }}"
           date -u
-
-      - run: npm install
-
-      - name: Run bot
-        run: node index.js
-        env:
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          ROLE_ID: ${{ secrets.ROLE_ID }}
