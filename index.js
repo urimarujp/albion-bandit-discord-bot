@@ -6,18 +6,19 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 
-// 任意：ロールメンション（入れないなら空でOK）
+// 任意：ロールメンション（無ければ空）
 const ROLE_ID = process.env.ROLE_ID || "";
 
-// 任意：テスト用（trueなら常に送信）
-const FORCE_NOTIFY = (process.env.FORCE_NOTIFY || "").toLowerCase() === "true";
+// GitHub Actions のイベント名（手動かどうか判定）
+const EVENT_NAME = process.env.GITHUB_EVENT_NAME || "";
+const IS_MANUAL = EVENT_NAME === "workflow_dispatch";
 
 // 山賊開始時刻（UTC固定）
 const BANDIT_START_UTC_HOURS = [2, 5, 7, 9, 13, 15, 17, 19];
 
 // 通知設定
 const NOTICE_MINUTES = 15;
-const LATE_TOLERANCE_MINUTES = 5; // GitHub Actions遅延対策（開始後5分まで許容）
+const LATE_TOLERANCE_MINUTES = 5; // schedule遅延対策（開始後5分まで許容）
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -48,7 +49,7 @@ function minutesUntil(startUtc, nowUtc) {
   return (startUtc.getTime() - nowUtc.getTime()) / 60000;
 }
 
-function shouldNotify(nowUtc, startUtc) {
+function inNotifyWindow(nowUtc, startUtc) {
   const diffMin = minutesUntil(startUtc, nowUtc);
   // 15分前〜開始後5分まで許容
   return diffMin <= NOTICE_MINUTES && diffMin >= -LATE_TOLERANCE_MINUTES;
@@ -56,7 +57,7 @@ function shouldNotify(nowUtc, startUtc) {
 
 function buildEmbed(startUtc, nowUtc) {
   const diffMin = minutesUntil(startUtc, nowUtc);
-  const remainText =
+  const status =
     diffMin >= 0
       ? `開始まで約 ${Math.ceil(diffMin)} 分`
       : `開始から約 ${Math.abs(Math.floor(diffMin))} 分経過`;
@@ -70,7 +71,8 @@ function buildEmbed(startUtc, nowUtc) {
         value: `${toUtcString(startUtc)} / ${toJstString(startUtc)}`,
         inline: true,
       },
-      { name: "状況", value: remainText, inline: true }
+      { name: "状況", value: status, inline: true },
+      { name: "トリガー", value: `${EVENT_NAME || "unknown"}`, inline: true }
     )
     .setTimestamp(new Date());
 }
@@ -84,7 +86,8 @@ client.once("ready", async () => {
     const startUtc = nextBanditStartUtc(nowUtc);
     const diffMin = minutesUntil(startUtc, nowUtc);
 
-    console.log("[BanditBot] FORCE_NOTIFY =", FORCE_NOTIFY);
+    console.log("[BanditBot] EVENT_NAME =", EVENT_NAME);
+    console.log("[BanditBot] IS_MANUAL   =", IS_MANUAL);
     console.log("[BanditBot] nowUtc      =", toUtcString(nowUtc));
     console.log(
       "[BanditBot] nextStart   =",
@@ -94,8 +97,9 @@ client.once("ready", async () => {
     );
     console.log("[BanditBot] diffMin     =", diffMin);
 
-    if (!FORCE_NOTIFY && !shouldNotify(nowUtc, startUtc)) {
-      console.log("[BanditBot] Not in notify window. Exit.");
+    // ★ここが肝：手動なら必ず送る／自動は時間窓内だけ送る
+    if (!IS_MANUAL && !inNotifyWindow(nowUtc, startUtc)) {
+      console.log("[BanditBot] Not in notify window (schedule). Exit.");
       process.exit(0);
     }
 
