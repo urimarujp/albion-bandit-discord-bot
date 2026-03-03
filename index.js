@@ -11,7 +11,7 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 const ROLE_ID = process.env.ROLE_ID || "";
 
 // 任意：テスト用（trueなら常に送信）
-const FORCE_NOTIFY = (process.env.FORCE_NOTIFY || "").toLowerCase() === "true";
+// const FORCE_NOTIFY = (process.env.FORCE_NOTIFY || "").toLowerCase() === "true";
 
 // 山賊開始時刻（UTC固定）
 const BANDIT_START_UTC_HOURS = [2, 5, 7, 9, 13, 15, 17, 19];
