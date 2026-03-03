@@ -15,6 +15,8 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: 20
+      #デバック用
+      - run: echo "event=${{ github.event_name }} ref=${{ github.ref }}"
 
       - run: npm install
       - run: node index.js
