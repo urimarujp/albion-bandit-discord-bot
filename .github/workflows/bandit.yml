@@ -3,7 +3,8 @@ name: Bandit Alert
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 * * * *"
+    # - cron: "*/5 * * * *"
     # 本番に戻すとき：
     # - cron: "45 1,4,6,8,12,14,16,18 * * *"
 
