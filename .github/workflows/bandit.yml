@@ -4,32 +4,33 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
+    # 本番に戻すとき
     # - cron: "45 1,4,6,8,12,14,16,18 * * *"
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
+
       - uses: actions/setup-node@v3
         with:
           node-version: 20
-      #デバック用
-      - run: echo "event=${{ github.event_name }} ref=${{ github.ref }}"
+
+      - name: Show trigger
+        run: echo "event=${{ github.event_name }} ref=${{ github.ref }}"
 
       - run: npm install
-      # テスト用
+
       - name: Debug FORCE_NOTIFY
-        run: |
-          echo "FORCE_NOTIFY=$FORCE_NOTIFY"
+        run: echo "FORCE_NOTIFY='$FORCE_NOTIFY'"
         env:
           FORCE_NOTIFY: ${{ secrets.FORCE_NOTIFY }}
-      # end テスト用
 
-      - run: node index.js
+      - name: Run bot
+        run: node index.js
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           FORCE_NOTIFY: ${{ secrets.FORCE_NOTIFY }}
-          FORCE_NOTIFY: ${{ secrets.FORCE_NOTIFY }}
+          ROLE_ID: ${{ secrets.ROLE_ID }}
