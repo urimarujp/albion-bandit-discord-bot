@@ -3,7 +3,8 @@ name: Bandit Alert
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 1,4,6,8,12,14,16,18 * * *"
+    - cron: "*/5 * * * *"
+    # - cron: "45 1,4,6,8,12,14,16,18 * * *"
 
 jobs:
   run:
