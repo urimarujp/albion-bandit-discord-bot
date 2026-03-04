@@ -6,12 +6,14 @@ import {
   PermissionsBitField,
 } from "discord.js";
 
-// /***
-//  * Albion Bandit Alert Bot (Production)
-//  * - schedule はズレる前提で、ワークフローは */5 等で回し、コードで送信判断
-//  * - 二重通知は「Discordの直近メッセージ検索」で防止（Actionsのクリーン実行対策）
-//  * - 本文は「⚔️ 山賊：HH:MM JST 開始の可能性あり」を必ず含める（ユーザー要望）
-//  */
+/**
+ * Albion Bandit Alert Bot (Final)
+ *
+ * ✅ GitHub Actions schedule のズレ前提（頻繁起動 + 時間窓判定）
+ * ✅ スマホ通知に出る本文(content)を最適化（改行 + 注意文）
+ * ✅ 山賊ロール(ROLE_ID)がある人だけメンション
+ * ✅ 二重通知防止：Discordの直近メッセージ履歴から同一開始回の投稿を検知
+ */
 
 // ===== Env =====
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -24,34 +26,34 @@ const EVENT_NAME = process.env.GITHUB_EVENT_NAME || "";
 const BANDIT_START_UTC_HOURS = [2, 5, 7, 9, 13, 15, 17, 19];
 
 // 通知ウィンドウ（GitHub遅延対策）
-// 「15分前」を狙いつつ、scheduleの遅延/先行も拾うために少し広め
-const NOTICE_MINUTES_BEFORE = 20; // 開始前 20分以内なら送る
-const ALLOW_MINUTES_AFTER = 10; // 開始後 10分までなら送る（遅延吸収）
+// 「15分前」を狙いつつ、ズレや遅延を吸収する
+const BEFORE_MIN = 20; // 開始前 20分以内なら通知OK
+const AFTER_MIN = 10; // 開始後 10分までなら通知OK（遅延吸収）
 
-// 重複防止：同じ開始時刻の通知が既にあれば送らない（Discord履歴から判定）
-const DUP_CHECK_MESSAGES = 50; // 直近n件をチェック（多いほど安全だがAPI回数増）
-const DUP_KEY_PREFIX = "⚔️ 山賊："; // 本文の先頭キー
+// 重複チェック（直近何件見るか）
+const DUP_CHECK_LIMIT = 80;
+
+// 本文の固定文言（スマホ通知用）
+const NOTICE_LINES = [
+  "時間は固定ですが、必ず山賊があるとは限りません。",
+  "ログインして通知が出ているか確認してください。",
+];
 
 // ===== Discord Client =====
-// メッセージ送信と履歴取得に MessageContent は不要。
-// ただし「チャンネルのメッセージ履歴を取得」できる権限がBOT側に必要。
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+// ===== Utils =====
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
 function toJstTimeString(dateUtc) {
   const jst = new Date(dateUtc.getTime() + 9 * 60 * 60 * 1000);
-  const hh = pad2(jst.getUTCHours());
-  const mm = pad2(jst.getUTCMinutes());
-  return `${hh}:${mm} JST`;
+  return `${pad2(jst.getUTCHours())}:${pad2(jst.getUTCMinutes())} JST`;
 }
 
 function toUtcTimeString(dateUtc) {
-  const hh = pad2(dateUtc.getUTCHours());
-  const mm = pad2(dateUtc.getUTCMinutes());
-  return `${hh}:${mm} UTC`;
+  return `${pad2(dateUtc.getUTCHours())}:${pad2(dateUtc.getUTCMinutes())} UTC`;
 }
 
 function nextBanditStartUtc(nowUtc) {
@@ -66,26 +68,25 @@ function nextBanditStartUtc(nowUtc) {
   return new Date(Date.UTC(y, m, d + 1, BANDIT_START_UTC_HOURS[0], 0, 0));
 }
 
-function minutesDiff(startUtc, nowUtc) {
+function diffMinutes(startUtc, nowUtc) {
   return (startUtc.getTime() - nowUtc.getTime()) / 60000;
 }
 
-function inNotifyWindow(nowUtc, startUtc) {
-  const diffMin = minutesDiff(startUtc, nowUtc);
+function inNotifyWindow(diffMin) {
   // diffMin: 正→開始前 / 負→開始後
-  return diffMin <= NOTICE_MINUTES_BEFORE && diffMin >= -ALLOW_MINUTES_AFTER;
+  return diffMin <= BEFORE_MIN && diffMin >= -AFTER_MIN;
 }
 
+// ===== Message builders =====
 function buildContent(startUtc) {
   const startJst = toJstTimeString(startUtc);
-  // ✅ ここが Discord 通知の「本文」：スマホ通知で見えるのは主にここ
-  return `${DUP_KEY_PREFIX}${startJst} 開始の可能性あり`;
+  return [`⚔️ 山賊：${startJst} 開始の可能性あり`, ...NOTICE_LINES].join("\n");
 }
 
 function buildEmbed(startUtc, nowUtc) {
   const startJst = toJstTimeString(startUtc);
   const startUtcStr = toUtcTimeString(startUtc);
-  const diffMin = minutesDiff(startUtc, nowUtc);
+  const diffMin = diffMinutes(startUtc, nowUtc);
 
   const status =
     diffMin >= 0
@@ -94,9 +95,7 @@ function buildEmbed(startUtc, nowUtc) {
 
   return new EmbedBuilder()
     .setTitle("🔥 山賊 開始予告")
-    .setDescription(
-      "時間は決まっていますが、必ず山賊があるとは限りません。ログインして通知が出ているか確認してください。",
-    )
+    .setDescription(NOTICE_LINES.join("\n"))
     .addFields(
       {
         name: "開始予定",
@@ -109,38 +108,36 @@ function buildEmbed(startUtc, nowUtc) {
     .setTimestamp(new Date());
 }
 
-/**
- * 直近メッセージから「同じ開始時刻の通知が既にあるか」を判定
- * - 例: "⚔️ 山賊：18:00 JST 開始の可能性あり" が既にあれば重複送信しない
- */
-async function alreadyNotified(channel, contentKey) {
-  // partial や textベース以外もあり得るので fetch 周りはtryで安全に
+// ===== Duplicate check =====
+// 同じ開始時刻の通知が既にあるか（BOTの過去投稿から検知）
+async function alreadyNotified(channel, key) {
   try {
-    const messages = await channel.messages.fetch({
-      limit: DUP_CHECK_MESSAGES,
-    });
+    const messages = await channel.messages.fetch({ limit: DUP_CHECK_LIMIT });
+
     for (const [, msg] of messages) {
-      // BOT自身の投稿だけを見る（他人の同文投稿で止まらないように）
+      // BOT自身の投稿だけ見る（他人の文章で止まらないように）
       if (!msg.author?.bot) continue;
-      if ((msg.content || "").includes(contentKey)) return true;
+      if ((msg.content || "").includes(key)) return true;
     }
     return false;
   } catch (e) {
-    // 履歴取得権限が無い等の時は「重複チェック不能」になるのでログに出して続行
+    // Read Message History が無いなどの場合：重複チェックできない
     console.warn("[BanditBot] Duplicate check skipped:", e?.message || e);
     return false;
   }
 }
 
+// ===== Main =====
 async function main() {
-  if (!TOKEN || !CHANNEL_ID)
+  if (!TOKEN || !CHANNEL_ID) {
     throw new Error("Missing DISCORD_TOKEN or CHANNEL_ID");
+  }
 
   const nowUtc = new Date();
   const startUtc = nextBanditStartUtc(nowUtc);
-  const diffMin = minutesDiff(startUtc, nowUtc);
+  const diffMin = diffMinutes(startUtc, nowUtc);
 
-  console.log("[BanditBot] EVENT_NAME =", EVENT_NAME);
+  console.log("[BanditBot] EVENT_NAME =", EVENT_NAME || "unknown");
   console.log("[BanditBot] nowUtc      =", toUtcTimeString(nowUtc));
   console.log(
     "[BanditBot] nextStart   =",
@@ -151,26 +148,25 @@ async function main() {
   console.log("[BanditBot] diffMin     =", diffMin);
   console.log(
     "[BanditBot] window      =",
-    `before<=${NOTICE_MINUTES_BEFORE} after<=${ALLOW_MINUTES_AFTER}`,
+    `before<=${BEFORE_MIN} after<=${AFTER_MIN}`,
   );
 
   const isManual = EVENT_NAME === "workflow_dispatch";
 
-  // scheduleはウィンドウ内だけ送る（無駄投稿防止）
-  if (!isManual && !inNotifyWindow(nowUtc, startUtc)) {
+  // scheduleはウィンドウ外なら送らない（無駄投稿防止）
+  if (!isManual && !inNotifyWindow(diffMin)) {
     console.log("[BanditBot] Not in notify window. Exit.");
     process.exit(0);
   }
 
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  // チャンネルがテキスト系かチェック
+  // sendできるチャンネルかチェック
   if (!channel || !("send" in channel)) {
     throw new Error("Target channel is not a sendable channel.");
   }
 
-  // 権限チェック（送信できないケースを分かりやすく）
-  // ※guildチャンネルの場合のみ有効。DMなどはnullになることがある。
+  // 権限チェック（分かりやすいエラーにする）
   if (channel.guild) {
     const me = channel.guild.members.me;
     if (me) {
@@ -178,30 +174,32 @@ async function main() {
       if (!perms?.has(PermissionsBitField.Flags.SendMessages)) {
         throw new Error("Missing permission: SendMessages");
       }
-      // Embed送信権限もチェック
       if (!perms?.has(PermissionsBitField.Flags.EmbedLinks)) {
         throw new Error("Missing permission: EmbedLinks");
       }
-      // 重複チェックで履歴読むなら ReadMessageHistory が必要
-      // 無い場合は重複チェックだけスキップして送信はできる
+      // ReadMessageHistory が無くても送信はできる（重複チェックだけ弱くなる）
     }
   }
 
-  const mention = ROLE_ID ? `<@&${ROLE_ID}> ` : "";
+  const mention = ROLE_ID ? `<@&${ROLE_ID}>` : "";
   const content = buildContent(startUtc);
 
-  // ✅ 二重通知防止（同じ開始時刻の文言が既にあるなら送らない）
-  const dupKey = content; // contentそのものをキーにする
-  const dup = await alreadyNotified(channel, dupKey);
-  if (dup && !isManual) {
-    console.log(
-      "[BanditBot] Already notified (found in recent messages). Exit.",
-    );
-    process.exit(0);
+  // ✅ 重複防止キー：開始時刻（JST）入りの1行目をキーにする
+  const key = `⚔️ 山賊：${toJstTimeString(startUtc)} 開始の可能性あり`;
+
+  // schedule時は重複があれば送らない（手動はテストなので送ってOK）
+  if (!isManual) {
+    const dup = await alreadyNotified(channel, key);
+    if (dup) {
+      console.log(
+        "[BanditBot] Already notified (found in recent messages). Exit.",
+      );
+      process.exit(0);
+    }
   }
 
   await channel.send({
-    content: `${mention}${content}`,
+    content: mention ? `${mention}\n${content}` : content,
     embeds: [buildEmbed(startUtc, nowUtc)],
   });
 
