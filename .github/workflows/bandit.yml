@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# ✅ 二重起動（リトライ等）で二重通知になるのを抑止
+concurrency:
+  group: albion-bandit
+  cancel-in-progress: true
+
 jobs:
   notify:
     runs-on: ubuntu-latest
@@ -22,6 +27,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          # ✅ npm依存をキャッシュして安定＆高速化
+          cache: npm
 
       - name: Install deps
         run: npm ci
