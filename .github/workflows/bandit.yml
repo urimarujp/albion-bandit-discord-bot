@@ -38,4 +38,5 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           ROLE_ID: ${{ secrets.ROLE_ID }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: node index.js
