@@ -1,29 +1,34 @@
-name: Bandit Alert
+name: Albion Bandit Bot (external cron)
 
 on:
   workflow_dispatch:
-  schedule:
-    # 山賊開始(UTC): 02,05,07,09,13,15,17,19
-    # 15分前(UTC):   01:45,04:45,06:45,08:45,12:45,14:45,16:45,18:45
-    # - cron: "45 1,4,6,8,12,14,16,18 * * *"
-    - cron: "*/5 * * * *"
+    inputs:
+      reason:
+        description: "Why triggered"
+        required: false
+        default: "external-cron"
+
+permissions:
+  contents: read
 
 jobs:
-  run:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - run: npm ci
+      - name: Install deps
+        run: npm ci
 
-      - name: Run bot
-        run: node index.js
+      - name: Run bot (send Discord)
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           ROLE_ID: ${{ secrets.ROLE_ID }}
+        run: node index.js
