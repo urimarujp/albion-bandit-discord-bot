@@ -3,31 +3,26 @@ name: Bandit Alert
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
-    # 本番に戻すとき（UTC）
-    # - cron: "45 1,4,6,8,12,14,16,18 * * *"
+    # 山賊開始(UTC): 02,05,07,09,13,15,17,19
+    # 15分前(UTC):   01:45,04:45,06:45,08:45,12:45,14:45,16:45,18:45
+    - cron: "45 1,4,6,8,12,14,16,18 * * *"
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Show trigger
-        run: |
-          echo "event=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          date -u
-
-      - run: npm install
+      - run: npm ci
 
       - name: Run bot
         run: node index.js
         env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           ROLE_ID: ${{ secrets.ROLE_ID }}
